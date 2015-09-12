@@ -1,0 +1,39 @@
+#!/usr/bin/env ruby
+require 'net/http'
+require 'tempfile'
+
+if ARGV.empty?
+  puts 'Usage: livehouse_get [URL]'
+  exit
+end
+
+body = Net::HTTP.get URI(ARGV.first)
+body.match /(https:\/\/vod-sl\.livehouse\.in\/[^\/]+\/[^\/]+\/(\d{10})[^\/]+\/)playlist\.m3u8/
+base_uri, id = $1, $2
+chunklist_uri = URI($&.sub('playlist.m3u8', "#{id}record_chunklist.m3u8"))
+chunklist = Net::HTTP.get(chunklist_uri).scan(/^.+\.ts$/)
+queue = Queue.new
+threads = []
+
+chunklist.each{ |name| queue << URI("#{base_uri}#{name}") }
+
+Dir.mktmpdir do |dir|
+  5.times do
+    threads << Thread.new do
+      until queue.empty? do
+        chunk_uri = queue.pop
+        path = File.join(dir, File.basename(chunk_uri.to_s))
+        IO.write path, Net::HTTP.get(chunk_uri), mode: 'wb'
+        print :'.'
+      end
+    end
+  end
+  threads.each(&:join)
+  download_path = File.absolute_path("#{id}.ts")
+  File.open download_path, 'wb' do |f|
+    Dir[File.join(dir, '*')].sort!.each do |path|
+      f.write IO.read(path)
+    end
+  end
+  puts "\nFile saved to #{download_path}"
+end
